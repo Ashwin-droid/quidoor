@@ -1,0 +1,17 @@
+/target/
+/engine/target/
+/.venv/
+/*.egg-info/
+/dist/
+/build/
+__pycache__/
+*.py[cod]
+*.so
+*.pyd
+*.dylib
+*.dll
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+/runs/
+/.coverage

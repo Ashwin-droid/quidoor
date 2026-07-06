@@ -1,0 +1,27 @@
+[package]
+name = "quoridor-engine"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "quoridor_engine"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+numpy = "0.27"
+pyo3 = { version = "0.27", features = ["abi3-py310"] }
+rand = "0.9"
+rand_chacha = "0.9"
+rand_distr = "0.5"
+rayon = "1.10"
+
+[dev-dependencies]
+criterion = "0.7"
+
+[features]
+default = []
+extension-module = ["pyo3/extension-module"]
+
+[[bench]]
+name = "random_playout"
+harness = false

@@ -1,0 +1,164 @@
+suite: quoridor_concept_probes_v1
+description: Soft concept probes for checkpoint trend analysis. Assertions are logged, not enforced.
+positions:
+  - id: must_block_p0_goal_edge
+    theme: must-block-mate-in-1
+    description: Player 0 is one pawn step from promotion; side to move should usually spend a wall.
+    position: "Q1 t=1 ply=31 p0=e8 p1=e6 w=10,10 h=- v=-"
+    assertions:
+      - type: top_action_type
+        expected: wall
+        note: A mature policy should notice the immediate promotion threat.
+      - type: action_type_mass
+        expected: wall
+        min: 0.35
+        note: Wall policy mass should rise on a one-move threat.
+
+  - id: must_block_p1_goal_edge
+    theme: must-block-mate-in-1
+    description: Player 1 is one pawn step from promotion; player 0 should usually block.
+    position: "Q1 t=0 ply=32 p0=e4 p1=e2 w=10,10 h=- v=-"
+    assertions:
+      - type: top_action_type
+        expected: wall
+        note: Immediate opponent promotion should dominate quiet pawn moves.
+      - type: action_type_mass
+        expected: wall
+        min: 0.35
+        note: Soft wall-mass check for mate-in-1 defense.
+
+  - id: wall_parity_last_wall_p0
+    theme: wall-parity endgame race
+    description: Late race with player 0 holding the final wall tempo.
+    position: "Q1 t=0 ply=62 p0=e7 p1=e3 w=1,0 h=b1,h1,b2,d3,g4,a5,f7 v=g1,b3,e3,f3,g3,d4,b5,e5,h6,d7,e8,f8"
+    assertions:
+      - type: action_type_mass
+        expected: wall
+        min: 0.20
+        note: The spare wall should be treated as a high-leverage tempo.
+      - type: value
+        op: gt
+        threshold: -0.35
+        note: Holding the final wall should not look hopeless.
+
+  - id: wall_parity_last_wall_p1
+    theme: wall-parity endgame race
+    description: Mirror-like late race where side to move has the only remaining wall.
+    position: "Q1 t=1 ply=65 p0=d7 p1=f3 w=0,1 h=e1,h1,a2,h2,a4,g5,c6,h6,a7,e7,h7 v=c2,d2,g4,a6,d6,g7,a8,d8"
+    assertions:
+      - type: action_type_mass
+        expected: wall
+        min: 0.20
+        note: Last-wall parity should be visible in the policy head.
+      - type: value
+        op: gt
+        threshold: -0.45
+        note: Side to move owns the final wall resource.
+
+  - id: follow_shadow_central_file
+    theme: follow-shadow tactic
+    description: Central contact structure where shadowing the opponent is often better than drifting away.
+    position: "Q1 t=0 ply=18 p0=e4 p1=e6 w=9,9 h=d4,d5 v=-"
+    assertions:
+      - type: top_action_type
+        expected: pawn
+        note: In a follow-shadow setup, pawn opposition should remain competitive.
+      - type: action_type_mass
+        expected: pawn
+        min: 0.10
+        note: Pawn-move mass should not collapse to wall-only play.
+
+  - id: follow_shadow_side_step
+    theme: follow-shadow tactic
+    description: Pawns are offset laterally; side to move can shadow instead of burning another wall.
+    position: "Q1 t=1 ply=19 p0=d5 p1=f5 w=9,9 h=d4,e5 v=-"
+    assertions:
+      - type: top_action_type
+        expected: pawn
+        note: Shadowing pressure often comes from pawn positioning.
+      - type: action_type_mass
+        expected: pawn
+        min: 0.10
+        note: Soft check that the policy keeps pawn tactics alive.
+
+  - id: hoard_vs_early_aggression_clean_start
+    theme: hoard-vs-early-aggression
+    description: Early position where the opponent has spent walls on distant blocks.
+    position: "Q1 t=0 ply=8 p0=e2 p1=e8 w=10,8 h=d7,f7 v=-"
+    assertions:
+      - type: top_action_type
+        expected: pawn
+        note: With a wall reserve edge, advancing should remain attractive.
+      - type: action_type_mass
+        expected: pawn
+        min: 0.08
+        note: Hoarding should not become passive wall spam.
+
+  - id: early_aggression_response
+    theme: hoard-vs-early-aggression
+    description: One early central wall asks whether the defender answers immediately or keeps tempo.
+    position: "Q1 t=1 ply=7 p0=e3 p1=e8 w=9,10 h=e2 v=-"
+    assertions:
+      - type: action_type_mass
+        expected: wall
+        min: 0.10
+        note: Early aggression should at least be considered as a response.
+      - type: value
+        op: gt
+        threshold: -0.75
+        note: A single early wall should not be evaluated as decisive.
+
+  - id: race_wall_choice_left_right
+    theme: wall-parity endgame race
+    description: Asymmetric race with two walls each and a tempting opponent cut.
+    position: "Q1 t=0 ply=44 p0=c7 p1=g3 w=8,9 h=f2,c6 v=d4"
+    assertions:
+      - type: action_type_mass
+        expected: wall
+        min: 0.15
+        note: Late-race wall candidates should stay in the candidate set.
+      - type: value
+        op: gt
+        threshold: -0.60
+        note: Side to move is close enough that the race should be playable.
+
+  - id: side_corridor_shadow
+    theme: follow-shadow tactic
+    description: Side-lane race where lateral shadowing and wall timing compete.
+    position: "Q1 t=1 ply=37 p0=b7 p1=h3 w=8,7 h=g2,b6 v=b4,h4,a5"
+    assertions:
+      - type: action_type_mass
+        expected: pawn
+        min: 0.08
+        note: The side corridor still permits pawn-tempo tactics.
+      - type: action_type_mass
+        expected: wall
+        min: 0.08
+        note: Wall timing should remain a live alternative.
+
+  - id: blocked_jump_diagonal_tactic
+    theme: follow-shadow tactic
+    description: Adjacent pawns with the straight jump blocked, exposing diagonal tactic choices.
+    position: "Q1 t=0 ply=24 p0=e5 p1=e6 w=9,9 h=e6 v=d4"
+    assertions:
+      - type: top_action_type
+        expected: pawn
+        note: Blocked-jump positions should reveal pawn tactic awareness.
+      - type: action_type_mass
+        expected: pawn
+        min: 0.10
+        note: Legal diagonal tactics should receive policy mass.
+
+  - id: central_last_tempo
+    theme: wall-parity endgame race
+    description: Central endgame race with one side materially ahead in wall tempo.
+    position: "Q1 t=1 ply=52 p0=e7 p1=d3 w=8,9 h=c2,d6 v=e4"
+    assertions:
+      - type: action_type_mass
+        expected: wall
+        min: 0.12
+        note: Extra wall tempo should be visible before the final pawn race.
+      - type: value
+        op: gt
+        threshold: -0.70
+        note: Wall parity should keep the side to move within range.

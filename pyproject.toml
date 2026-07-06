@@ -1,0 +1,15 @@
+[build-system]
+requires = ["maturin>=1.8,<2"]
+build-backend = "maturin"
+
+[project]
+name = "quoridor-engine"
+version = "0.1.0"
+description = "Rust Quoridor engine core and PyO3 bindings for Quoridor AlphaZero"
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.26"]
+
+[tool.maturin]
+manifest-path = "engine/Cargo.toml"
+module-name = "quoridor_engine"
+features = ["extension-module"]
