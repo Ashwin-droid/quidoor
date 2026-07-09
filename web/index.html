@@ -357,7 +357,8 @@ function renderEval(d) {
     ? (ev.winner === 0 ? "bottom" : "top") + " player wins in " + ev.mate_in + (ev.mate_in === 1 ? " move" : " moves")
     : "+100 = one move of shortest-path advantage for the bottom player";
   $("netline").textContent =
-    "net " + d.net.name + " value " + (d.net.value >= 0 ? "+" : "") + d.net.value.toFixed(3);
+    "net " + d.net.name + " value " + (d.net.value >= 0 ? "+" : "") + d.net.value.toFixed(3) +
+    (d.net.score_text ? " · net eval " + d.net.score_text : "");
 
   const row = $("walls-row");
   row.innerHTML = "";

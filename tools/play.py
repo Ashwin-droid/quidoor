@@ -16,6 +16,7 @@ from baselines.common import (
     action_to_label,
     evaluate_position,
     format_eval,
+    format_net_score,
     parse_action,
     render_board,
 )
@@ -24,6 +25,7 @@ from trainer.arena import (
     evaluate_state,
     load_checkpoint_evaluator,
     load_config_for_cli,
+    net_eval_score,
     resolve_step,
     search_root,
     top_actions,
@@ -48,7 +50,9 @@ def print_net_view(state: qe.GameState, evaluator, config: Config) -> None:
         f"{item['label']}:{item['prob']:.3f}" for item in items
     )
     print(f"eval {format_eval(evaluate_position(state))}")
-    print(f"net[{evaluator.name}] value={value:+.3f} top5: {joined}")
+    score = net_eval_score(state, evaluator, config)
+    score_note = "" if score is None else f" eval={format_net_score(score)}"
+    print(f"net[{evaluator.name}] value={value:+.3f}{score_note} top5: {joined}")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

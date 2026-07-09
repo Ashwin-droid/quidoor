@@ -22,15 +22,16 @@ def test_model_shapes_and_optional_masking() -> None:
     model = QuoridorNet(cfg).eval()
     planes = torch.randn(3, 6, 9, 9)
 
-    logits, values = model(planes)
+    logits, values, scores = model(planes)
     assert logits.shape == (3, 140)
     assert values.shape == (3,)
+    assert scores.shape == (3,)
     assert torch.all(values <= 1)
     assert torch.all(values >= -1)
 
     mask = torch.zeros(3, 140, dtype=torch.bool)
     mask[:, [0, 7]] = True
-    masked_logits, _ = model(planes, mask)
+    masked_logits, _, _ = model(planes, mask)
     assert torch.isfinite(masked_logits[:, 0]).all()
     assert torch.isfinite(masked_logits[:, 7]).all()
     assert torch.isneginf(masked_logits[:, 1]).all()
@@ -70,6 +71,7 @@ def test_inferencer_uses_bounded_bucket_shapes() -> None:
             return (
                 torch.zeros(batch, cfg.rules.num_actions, device=planes.device),
                 torch.zeros(batch, device=planes.device),
+                torch.zeros(batch, device=planes.device),
             )
 
     inferencer._model_for_infer = Recorder()
@@ -90,5 +92,22 @@ def test_load_model_reads_checkpoint_state(tmp_path) -> None:
     torch.save({"model_state": model.state_dict()}, tmp_path / "state.pt")
 
     loaded = load_model(tmp_path, cfg, torch.device("cpu"))
+    assert loaded.score_head_loaded is True
     for key, tensor in model.state_dict().items():
+        torch.testing.assert_close(loaded.state_dict()[key], tensor)
+
+
+def test_load_model_tolerates_checkpoints_without_score_head(tmp_path) -> None:
+    cfg = tiny_config()
+    model = QuoridorNet(cfg)
+    legacy_state = {
+        key: tensor
+        for key, tensor in model.state_dict().items()
+        if not key.startswith(("score_conv.", "score_fc."))
+    }
+    torch.save({"model_state": legacy_state}, tmp_path / "state.pt")
+
+    loaded = load_model(tmp_path, cfg, torch.device("cpu"))
+    assert loaded.score_head_loaded is False
+    for key, tensor in legacy_state.items():
         torch.testing.assert_close(loaded.state_dict()[key], tensor)

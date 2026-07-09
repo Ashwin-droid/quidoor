@@ -35,6 +35,59 @@ def _build_mirror_actions() -> np.ndarray:
 MIRROR_ACTIONS = _build_mirror_actions()
 
 
+def eval_score_targets(
+    z: np.ndarray | Iterable[float],
+    position_strings: np.ndarray | Iterable[str] | None = None,
+) -> np.ndarray:
+    """Continuous eval targets in moves-ahead units, side-to-move perspective.
+
+    Positions where the race is provably decided get the exact mate score
+    (+/-(40 - distance), always outside +/-20) regardless of how the game
+    actually ended. Everything else blends the shortest-path heuristic with
+    the game outcome half-and-half, so positions from lost games are pulled
+    negative and the network is penalised for claiming wins (or mates) for
+    the side that went on to lose. Both components are bounded so undecided
+    targets stay inside the +/-20 non-mate region. Mirroring does not affect
+    targets: scores are left-right symmetric.
+    """
+
+    from baselines.common import (
+        EVAL_SCORE_CLAMP as _clamp,
+        forced_win,
+        heuristic_score_moves,
+        mate_score,
+    )
+
+    z_np = np.asarray(z, dtype=np.float32)
+    targets = ((0.5 * _clamp) * z_np).astype(np.float32)
+    if position_strings is None:
+        return targets
+
+    import quoridor_engine as qe
+
+    out = targets.copy()
+    for idx, text in enumerate(np.asarray(position_strings).reshape(-1)):
+        text = str(text)
+        if not text:
+            continue
+        try:
+            state = qe.GameState.from_string(text)
+        except Exception:
+            continue
+        mover = int(state.to_move)
+        mate = forced_win(state)
+        if mate is not None:
+            winner, distance = mate
+            score = mate_score(distance)
+            out[idx] = score if winner == mover else -score
+        else:
+            heuristic = float(
+                np.clip(heuristic_score_moves(state, mover), -_clamp, _clamp)
+            )
+            out[idx] = 0.5 * heuristic + (0.5 * _clamp) * float(z_np[idx])
+    return out.astype(np.float32)
+
+
 def mirror_policy(policy: np.ndarray) -> np.ndarray:
     arr = np.asarray(policy)
     if arr.shape[-1] != NUM_ACTIONS:
@@ -90,6 +143,7 @@ class ReplayBuffer:
         self.policies = np.zeros((self.capacity, self.num_actions), dtype=np.float32)
         self.masks = np.zeros((self.capacity, self.num_actions), dtype=np.bool_)
         self.z = np.zeros((self.capacity,), dtype=np.float32)
+        self.eval_score = np.zeros((self.capacity,), dtype=np.float32)
         self.position_strings = np.full(
             (self.capacity,), "", dtype=POSITION_STRING_DTYPE
         )
@@ -119,6 +173,7 @@ class ReplayBuffer:
         position_strings_np = self._normalize_position_strings(
             position_strings, original_count
         )
+        eval_score_np = eval_score_targets(z_np, position_strings_np)
 
         mirror_probability = float(self.config.training.mirror_probability)
         if mirror_probability > 0:
@@ -138,6 +193,7 @@ class ReplayBuffer:
             z_np,
             position_strings_np,
             total_increment=original_count,
+            eval_score=eval_score_np,
         )
 
     def add_finished_game(
@@ -199,6 +255,7 @@ class ReplayBuffer:
             "policy": self.policies[indices].copy(),
             "mask": self.masks[indices].copy(),
             "z": self.z[indices].copy(),
+            "eval_score": self.eval_score[indices].copy(),
         }
 
     sample_batch = sample
@@ -210,6 +267,7 @@ class ReplayBuffer:
             "policy": self.policies[indices].copy(),
             "mask": self.masks[indices].copy(),
             "z": self.z[indices].copy(),
+            "eval_score": self.eval_score[indices].copy(),
             "position_strings": self.position_strings[indices].copy(),
         }
 
@@ -246,6 +304,7 @@ class ReplayBuffer:
                     policy=self.policies[chunk_indices],
                     mask=self.masks[chunk_indices],
                     z=self.z[chunk_indices],
+                    eval_score=self.eval_score[chunk_indices],
                     position_strings=self.position_strings[chunk_indices],
                 )
                 handle.flush()
@@ -288,7 +347,7 @@ class ReplayBuffer:
         for shard_idx, shard in enumerate(shards):
             is_final = shard_idx == len(shards) - 1
             try:
-                planes, policies, masks, z, position_strings = _load_shard(
+                planes, policies, masks, z, eval_score, position_strings = _load_shard(
                     path / shard["file"]
                 )
             except Exception:
@@ -302,6 +361,10 @@ class ReplayBuffer:
                 raise ValueError(
                     f"shard {shard['file']} count mismatch: {planes.shape[0]} != {expected}"
                 )
+            if eval_score is None:
+                # Shard predates the eval-score field: rebuild targets from
+                # the stored outcomes and position strings.
+                eval_score = eval_score_targets(z, position_strings)
             buffer._write_batch(
                 planes,
                 policies,
@@ -309,6 +372,7 @@ class ReplayBuffer:
                 z,
                 position_strings,
                 total_increment=0,
+                eval_score=eval_score,
             )
             loaded += planes.shape[0]
 
@@ -376,6 +440,7 @@ class ReplayBuffer:
         z: np.ndarray,
         position_strings: np.ndarray | None,
         total_increment: int,
+        eval_score: np.ndarray | None = None,
     ) -> None:
         count = planes.shape[0]
         if count == 0:
@@ -384,11 +449,16 @@ class ReplayBuffer:
             position_strings = np.full((count,), "", dtype=POSITION_STRING_DTYPE)
         else:
             position_strings = np.asarray(position_strings, dtype=POSITION_STRING_DTYPE)
+        if eval_score is None:
+            eval_score = eval_score_targets(z, position_strings)
+        else:
+            eval_score = np.asarray(eval_score, dtype=np.float32)
         if count > self.capacity:
             planes = planes[-self.capacity :]
             policies = policies[-self.capacity :]
             masks = masks[-self.capacity :]
             z = z[-self.capacity :]
+            eval_score = eval_score[-self.capacity :]
             position_strings = position_strings[-self.capacity :]
             count = self.capacity
 
@@ -401,6 +471,7 @@ class ReplayBuffer:
             self.policies[target] = policies[start:end]
             self.masks[target] = masks[start:end]
             self.z[target] = z[start:end]
+            self.eval_score[target] = eval_score[start:end]
             self.position_strings[target] = position_strings[start:end]
             self.write_pos = (self.write_pos + writable) % self.capacity
             self.size = min(self.capacity, self.size + writable)
@@ -421,12 +492,19 @@ class ReplayBuffer:
 
 def _load_shard(
     path: Path,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None]:
+) -> tuple[
+    np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray | None, np.ndarray | None
+]:
     with np.load(path, allow_pickle=False) as data:
         planes = np.asarray(data["planes"], dtype=np.float32)
         policies = np.asarray(data["policy"], dtype=np.float32)
         masks = np.asarray(data["mask"]).astype(np.bool_, copy=False)
         z = np.asarray(data["z"], dtype=np.float32)
+        eval_score = (
+            np.asarray(data["eval_score"], dtype=np.float32)
+            if "eval_score" in data.files
+            else None
+        )
         position_key = _first_present_key(
             data.files, ("position_strings", "states_text", "positions", "position")
         )
@@ -435,7 +513,7 @@ def _load_shard(
             if position_key is not None
             else None
         )
-    return planes, policies, masks, z, position_strings
+    return planes, policies, masks, z, eval_score, position_strings
 
 
 def _first_present_key(keys: Iterable[str], candidates: Iterable[str]) -> str | None:

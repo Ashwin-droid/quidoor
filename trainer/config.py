@@ -59,6 +59,9 @@ class TrainingConfig:
     weight_decay: float = 1e-4
     grad_clip: float = 1.0
     lr_schedule: str = "cosine"
+    # Weight of the continuous eval-score head loss (smooth L1 on /10-scaled
+    # scores). 0 disables the head's gradient without changing the model.
+    eval_score_weight: float = 1.0
 
 
 @dataclass(slots=True)

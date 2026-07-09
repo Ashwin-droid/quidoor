@@ -276,6 +276,29 @@ def evaluate_state(
     return policy, float(values[0])
 
 
+def net_eval_score(
+    state: qe.GameState,
+    evaluator: PolicyValueEvaluator,
+    config: Config,
+) -> float | None:
+    """Model's continuous eval from player 0's perspective, when available.
+
+    Returns None for stub evaluators and for checkpoints that predate the
+    score head (whose head weights would be uninitialized noise).
+    """
+
+    inferencer = getattr(evaluator, "inferencer", None)
+    if inferencer is None:
+        return None
+    if not getattr(getattr(inferencer, "model", None), "score_head_loaded", False):
+        return None
+    planes = np.asarray(state.encode(config.net.extra_planes), dtype=np.float32)[None, ...]
+    masks = np.asarray(state.legal_mask()).astype(np.bool_, copy=False)[None, ...]
+    _, _, scores = inferencer.infer_with_score(planes, masks)
+    score = float(scores[0])
+    return score if int(state.to_move) == 0 else -score
+
+
 def search_root(
     state: qe.GameState,
     evaluator: PolicyValueEvaluator,

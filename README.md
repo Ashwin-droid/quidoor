@@ -21,6 +21,16 @@ perspective: integer centi-moves (`+100` = one move of shortest-path
 advantage, exactly `0` at the start) that switches to `+M7`/`-M4` once the
 position is a provably decided race.
 
+The network also learns its own eval: a score head predicts a continuous
+moves-ahead number where `|score| <= 20` is a normal eval and anything
+beyond encodes a mate claim (`+/-(40 - distance)`). Training targets use
+the exact race-mate scores where provable and otherwise blend the
+shortest-path heuristic with the game outcome, so the net is penalised for
+claiming wins for the side that went on to lose. Checkpoints and replay
+buffers from before this head load unchanged (the head starts fresh and its
+display is hidden until it has been trained). Tune with
+`training.eval_score_weight`.
+
 ```bash
 # terminal play against a checkpoint (or --opponent stub/random/greedy/minimax-2)
 .venv/bin/python tools/play.py --run runs/run1

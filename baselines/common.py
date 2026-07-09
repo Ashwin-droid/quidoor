@@ -186,6 +186,14 @@ CP_PER_MOVE = 100
 CP_PER_WALL = 25
 MATE_CP = 10_000
 
+# Continuous score space for the network's eval head, in moves-ahead units:
+# |score| <= 20 is a normal evaluation, anything beyond is a forced mate with
+# the depth encoding distance — mate in n maps to +/-(40 - n), so mate-in-1
+# is ~39 and a very distant mate saturates at 21.
+EVAL_SCORE_CLAMP = 20.0
+MATE_SCORE_BASE = 40.0
+MATE_SCORE_MAX_DISTANCE = 19
+
 
 @dataclass(frozen=True, slots=True)
 class EvalScore:
@@ -262,6 +270,32 @@ def format_eval(score: EvalScore) -> str:
     if score.cp == 0:
         return "0"
     return f"{score.cp:+d}"
+
+
+def mate_score(mate_in: int) -> float:
+    """Map a mate distance into the continuous score space (always > 20)."""
+
+    return MATE_SCORE_BASE - min(max(int(mate_in), 0), MATE_SCORE_MAX_DISTANCE)
+
+
+def heuristic_score_moves(state: qe.GameState, player: int) -> float:
+    """Shortest-path eval in moves-ahead units from `player`'s perspective."""
+
+    player = int(player)
+    opponent = player ^ 1
+    path_term = int(state.shortest_path_len(opponent)) - int(state.shortest_path_len(player))
+    wall_term = int(state.walls_left(player)) - int(state.walls_left(opponent))
+    return float(path_term) + (CP_PER_WALL / CP_PER_MOVE) * float(wall_term)
+
+
+def format_net_score(score: float) -> str:
+    """Render a continuous net score like the deterministic eval text."""
+
+    if abs(score) > EVAL_SCORE_CLAMP:
+        distance = max(0, round(MATE_SCORE_BASE - abs(score)))
+        return f"{'+' if score > 0 else '-'}M{distance}"
+    cp = round(score * CP_PER_MOVE)
+    return "0" if cp == 0 else f"{cp:+d}"
 
 
 def evaluate_shortest_path_diff(state: qe.GameState, player: int) -> float:

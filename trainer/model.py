@@ -76,15 +76,32 @@ class QuoridorNet(nn.Module):
             nn.Tanh(),
         )
 
+        # Continuous eval head: moves-ahead score from the side to move's
+        # perspective; |score| <= 20 is a normal eval, beyond is a mate claim.
+        self.score_conv = nn.Sequential(
+            nn.Conv2d(channels, 1, kernel_size=1, bias=False),
+            nn.BatchNorm2d(1),
+            nn.ReLU(inplace=True),
+            nn.Flatten(),
+        )
+        self.score_fc = nn.Sequential(
+            nn.Linear(board * board, 64),
+            nn.ReLU(inplace=True),
+            nn.Linear(64, 1),
+        )
+        # False when weights came from a checkpoint predating the score head.
+        self.score_head_loaded = True
+
     def forward(
         self, planes: torch.Tensor, legal_mask: torch.Tensor | None = None
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         x = self.body(self.stem(planes))
         policy_logits = self.policy_head(x)
         if legal_mask is not None:
             policy_logits = mask_illegal_logits(policy_logits, legal_mask)
         value = self.value_fc(self.value_conv(x)).squeeze(-1)
-        return policy_logits, value
+        score = self.score_fc(self.score_conv(x)).squeeze(-1)
+        return policy_logits, value, score
 
 
 def mask_illegal_logits(
@@ -92,6 +109,26 @@ def mask_illegal_logits(
 ) -> torch.Tensor:
     legal = legal_mask.to(device=policy_logits.device, dtype=torch.bool)
     return policy_logits.masked_fill(~legal, float("-inf"))
+
+
+def load_model_state(model: QuoridorNet, model_state: dict[str, Any]) -> bool:
+    """Load weights, tolerating checkpoints that predate the score head.
+
+    Returns True when the checkpoint contained score-head weights. Any other
+    mismatch is still an error.
+    """
+
+    missing, unexpected = model.load_state_dict(model_state, strict=False)
+    if unexpected:
+        raise RuntimeError(f"unexpected keys in checkpoint model_state: {sorted(unexpected)}")
+    score_keys = {
+        key for key in model.state_dict() if key.startswith(("score_conv.", "score_fc."))
+    }
+    stray = set(missing) - score_keys
+    if stray:
+        raise RuntimeError(f"missing keys in checkpoint model_state: {sorted(stray)}")
+    model.score_head_loaded = not missing
+    return model.score_head_loaded
 
 
 def load_model(ckpt_dir: Path, config: Config, device: torch.device | str) -> QuoridorNet:
@@ -106,7 +143,7 @@ def load_model(ckpt_dir: Path, config: Config, device: torch.device | str) -> Qu
     model_state = state.get("model_state", state)
 
     model = QuoridorNet(config).to(device)
-    model.load_state_dict(model_state)
+    load_model_state(model, model_state)
     model.eval()
     return model
 
@@ -154,6 +191,12 @@ class Inferencer:
     def infer(
         self, planes: np.ndarray, masks: np.ndarray
     ) -> tuple[np.ndarray, np.ndarray]:
+        policy_out, value_out, _ = self.infer_with_score(planes, masks)
+        return policy_out, value_out
+
+    def infer_with_score(
+        self, planes: np.ndarray, masks: np.ndarray
+    ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         planes_np = np.asarray(planes, dtype=np.float32)
         masks_np = np.asarray(masks).astype(np.bool_, copy=False)
         self._validate_inputs(planes_np, masks_np)
@@ -163,10 +206,12 @@ class Inferencer:
             return (
                 np.empty((0, self.num_actions), dtype=np.float32),
                 np.empty((0,), dtype=np.float32),
+                np.empty((0,), dtype=np.float32),
             )
 
         policy_out = np.empty((batch, self.num_actions), dtype=np.float32)
         value_out = np.empty((batch,), dtype=np.float32)
+        score_out = np.empty((batch,), dtype=np.float32)
 
         with torch.inference_mode():
             for start in range(0, batch, self.fixed_batch_size):
@@ -202,14 +247,16 @@ class Inferencer:
                     dtype=torch.bfloat16,
                     enabled=autocast_enabled,
                 ):
-                    logits_t, values_t = self._model_for_infer(planes_t)
+                    logits_t, values_t, scores_t = self._model_for_infer(planes_t)
 
                 logits_t = mask_illegal_logits(logits_t.float(), masks_t)
                 values_t = values_t.float()
+                scores_t = scores_t.float()
                 policy_out[start:stop] = logits_t[:actual].cpu().numpy()
                 value_out[start:stop] = values_t[:actual].cpu().numpy()
+                score_out[start:stop] = scores_t[:actual].cpu().numpy()
 
-        return policy_out, value_out
+        return policy_out, value_out, score_out
 
     @staticmethod
     def _build_batch_buckets(max_batch_size: int) -> tuple[int, ...]:

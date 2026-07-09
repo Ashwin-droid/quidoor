@@ -33,7 +33,7 @@ from .logging_utils import (
     make_summary_writer,
     read_json_if_present,
 )
-from .model import Inferencer, QuoridorNet
+from .model import Inferencer, QuoridorNet, load_model_state
 from .replay_buffer import ReplayBuffer
 from .selfplay_driver import (
     SelfPlayMetrics,
@@ -213,13 +213,15 @@ def run_training(
 
         if loaded_checkpoint is not None:
             state = loaded_checkpoint["state"]
-            model.load_state_dict(state["model_state"])
+            if not load_model_state(model, state["model_state"]):
+                logger.event("score_head_initialized_fresh", reason="checkpoint predates score head")
             load_optimizer_state(optimizer, state.get("optimizer_state"), logger)
             load_scheduler_state(scheduler, state.get("scheduler_state"), logger)
         elif init_from is not None:
             ckpt_dir = resolve_checkpoint_dir(init_from)
             state = torch.load(ckpt_dir / "state.pt", map_location=device, weights_only=False)
-            model.load_state_dict(state["model_state"])
+            if not load_model_state(model, state["model_state"]):
+                logger.event("score_head_initialized_fresh", reason="checkpoint predates score head")
             logger.event("init_from_loaded", checkpoint=ckpt_dir)
 
         inferencer = None
@@ -461,13 +463,18 @@ def train_one_step(
     mask = torch.from_numpy(batch["mask"]).to(device=device, dtype=torch.bool)
     policy_target = torch.from_numpy(batch["policy"]).to(device=device, dtype=torch.float32)
     z = torch.from_numpy(batch["z"]).to(device=device, dtype=torch.float32)
+    score_target = torch.from_numpy(batch["eval_score"]).to(device=device, dtype=torch.float32)
     policy_target = normalize_policy_targets(policy_target, mask)
 
     optimizer.zero_grad(set_to_none=True)
-    logits, values = model(planes, mask)
+    logits, values, scores = model(planes, mask)
     policy_loss, policy_entropy = soft_policy_loss_and_entropy(logits, policy_target, mask)
     value_loss = F.mse_loss(values, z)
-    loss = policy_loss + value_loss
+    score_weight = float(config.training.eval_score_weight)
+    # Scores span roughly +/-40, so scale down before the Huber loss to keep
+    # this term comparable to the policy/value losses.
+    score_loss = F.smooth_l1_loss(scores / 10.0, score_target / 10.0)
+    loss = policy_loss + value_loss + score_weight * score_loss
     if not torch.isfinite(loss):
         raise FloatingPointError(f"non-finite loss: {float(loss.detach().cpu())}")
     loss.backward()
@@ -479,6 +486,8 @@ def train_one_step(
         "total_loss": float(loss.detach().cpu()),
         "policy_loss": float(policy_loss.detach().cpu()),
         "value_loss": float(value_loss.detach().cpu()),
+        "eval_score_loss": float(score_loss.detach().cpu()),
+        "eval_score_mae": float((scores.detach() - score_target).abs().mean().cpu()),
         "policy_entropy": float(policy_entropy.detach().cpu()),
         "value_target_correlation": value_target_correlation(values.detach(), z.detach()),
         "lr": float(optimizer.param_groups[0]["lr"]),

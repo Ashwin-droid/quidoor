@@ -33,6 +33,7 @@ from baselines.common import (
     action_to_label,
     evaluate_position,
     format_eval,
+    format_net_score,
     parse_wall_sets,
     pawn_destination,
 )
@@ -42,6 +43,7 @@ from trainer.arena import (
     evaluate_state,
     load_checkpoint_evaluator,
     load_config_for_cli,
+    net_eval_score,
     normalize_policy,
     resolve_step,
     top_actions,
@@ -133,6 +135,7 @@ def state_payload(session: Session, moves: list[dict[str, Any]]) -> dict[str, An
     score = evaluate_position(state)
     with ENGINE_LOCK:
         _, net_value = evaluate_state(state, APP["evaluator"], session.config)
+        net_score = net_eval_score(state, APP["evaluator"], session.config)
 
     hwalls, vwalls = parse_wall_sets(state)
     return {
@@ -154,7 +157,12 @@ def state_payload(session: Session, moves: list[dict[str, Any]]) -> dict[str, An
             "winner": score.winner,
             "text": format_eval(score),
         },
-        "net": {"name": APP["evaluator"].name, "value": float(net_value)},
+        "net": {
+            "name": APP["evaluator"].name,
+            "value": float(net_value),
+            "score": None if net_score is None else float(net_score),
+            "score_text": None if net_score is None else format_net_score(net_score),
+        },
         "search_top": session.search_top,
         "moves": moves,
         "history": list(session.history),
