@@ -12,42 +12,23 @@ if str(ROOT) not in sys.path:
 
 import quoridor_engine as qe
 from baselines import GreedyPlayer, MinimaxPlayer, RandomPlayer
-from baselines.common import action_to_label, parse_action, render_board
+from baselines.common import (
+    action_to_label,
+    evaluate_position,
+    format_eval,
+    parse_action,
+    render_board,
+)
 from trainer.arena import (
     StubEvaluator,
     evaluate_state,
     load_checkpoint_evaluator,
     load_config_for_cli,
+    resolve_step,
     search_root,
     top_actions,
 )
 from trainer.config import Config
-
-
-def resolve_step(run_dir: Path | None, requested: int | None) -> int:
-    if requested is not None:
-        return int(requested)
-    if run_dir is None:
-        return 0
-    latest = run_dir / "ckpt" / "latest"
-    if latest.exists():
-        try:
-            target = latest.resolve()
-            if target.name.isdigit():
-                return int(target.name)
-        except Exception:
-            try:
-                text = latest.read_text(encoding="utf-8").strip()
-                if text.isdigit():
-                    return int(text)
-            except Exception:
-                pass
-    ckpt_root = run_dir / "ckpt"
-    if ckpt_root.exists():
-        steps = sorted(int(path.name) for path in ckpt_root.iterdir() if path.name.isdigit())
-        if steps:
-            return steps[-1]
-    return 0
 
 
 def make_baseline(name: str, seed: int):
@@ -66,6 +47,7 @@ def print_net_view(state: qe.GameState, evaluator, config: Config) -> None:
     joined = ", ".join(
         f"{item['label']}:{item['prob']:.3f}" for item in items
     )
+    print(f"eval {format_eval(evaluate_position(state))}")
     print(f"net[{evaluator.name}] value={value:+.3f} top5: {joined}")
 
 

@@ -660,6 +660,35 @@ def write_json_atomic(path: Path, payload: dict[str, Any]) -> None:
     os.replace(tmp_path, path)
 
 
+def resolve_step(run_dir: Path | None, requested: int | None) -> int:
+    """Resolve a checkpoint step for CLI tools, defaulting to the latest one."""
+
+    if requested is not None:
+        return int(requested)
+    if run_dir is None:
+        return 0
+    run_dir = Path(run_dir)
+    latest = run_dir / "ckpt" / "latest"
+    if latest.exists():
+        try:
+            target = latest.resolve()
+            if target.name.isdigit():
+                return int(target.name)
+        except Exception:
+            try:
+                text = latest.read_text(encoding="utf-8").strip()
+                if text.isdigit():
+                    return int(text)
+            except Exception:
+                pass
+    ckpt_root = run_dir / "ckpt"
+    if ckpt_root.exists():
+        steps = sorted(int(path.name) for path in ckpt_root.iterdir() if path.name.isdigit())
+        if steps:
+            return steps[-1]
+    return 0
+
+
 def load_config_for_cli(run_dir: Path, ckpt_step: int) -> Config:
     config = Config()
     state_path = Path(run_dir) / "ckpt" / str(int(ckpt_step)) / "state.pt"

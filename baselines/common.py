@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Protocol
 
 import numpy as np
@@ -179,6 +180,88 @@ def render_board(state: qe.GameState) -> str:
         f"walls=({state.walls_left(0)},{state.walls_left(1)})"
     )
     return "\n".join(lines)
+
+
+CP_PER_MOVE = 100
+CP_PER_WALL = 25
+MATE_CP = 10_000
+
+
+@dataclass(frozen=True, slots=True)
+class EvalScore:
+    """Stockfish-style position score from player 0's perspective.
+
+    `kind` is `"cp"` for a heuristic score in centi-moves (one full move of
+    shortest-path advantage = 100) or `"mate"` for a forced win. For mates,
+    `winner` is the winning player and `mate_in` counts the winner's own
+    remaining moves; `cp` is clamped to +/-MATE_CP so the score stays usable
+    as a bar/graph value.
+    """
+
+    kind: str
+    cp: int
+    mate_in: int | None = None
+    winner: int | None = None
+
+
+def forced_win(state: qe.GameState) -> tuple[int, int] | None:
+    """Return `(winner, moves)` when the position is a decided race, else None.
+
+    A finished game is a win in 0. Otherwise the position is provably decided
+    once the trailing side has no walls left to slow the leader: the leader
+    just walks their shortest path. This uses the standard Quoridor race
+    assumption that a wall-less opponent's pawn cannot delay the runner (a
+    facing pawn is jumped over, at worst breaking even).
+    """
+
+    winner = state.winner()
+    if winner is not None:
+        return int(winner), 0
+
+    mover = int(state.to_move)
+    other = mover ^ 1
+    d_mover = int(state.shortest_path_len(mover))
+    d_other = int(state.shortest_path_len(other))
+
+    # One step from goal on your own turn: no opponent reply intervenes.
+    if d_mover == 1:
+        return mover, 1
+
+    # Mover wins the race on ties because they move first from here.
+    if int(state.walls_left(other)) == 0 and d_mover <= d_other:
+        return mover, d_mover
+    if int(state.walls_left(mover)) == 0 and d_other < d_mover:
+        return other, d_other
+    return None
+
+
+def evaluate_position(state: qe.GameState) -> EvalScore:
+    """Score a position like Stockfish: integer centi-moves, mates as Mxx.
+
+    The heuristic score is symmetric and deterministic — the starting
+    position is exactly 0 — combining shortest-path difference (100 per
+    move) and walls in hand (25 per wall), always from player 0's view.
+    """
+
+    mate = forced_win(state)
+    if mate is not None:
+        winner, distance = mate
+        sign = 1 if winner == 0 else -1
+        return EvalScore(kind="mate", cp=sign * MATE_CP, mate_in=distance, winner=winner)
+
+    path_term = int(state.shortest_path_len(1)) - int(state.shortest_path_len(0))
+    wall_term = int(state.walls_left(0)) - int(state.walls_left(1))
+    cp = CP_PER_MOVE * path_term + CP_PER_WALL * wall_term
+    return EvalScore(kind="cp", cp=int(cp))
+
+
+def format_eval(score: EvalScore) -> str:
+    if score.kind == "mate":
+        sign = "+" if score.winner == 0 else "-"
+        return f"{sign}M{score.mate_in}"
+    if score.cp == 0:
+        return "0"
+    return f"{score.cp:+d}"
 
 
 def evaluate_shortest_path_diff(state: qe.GameState, player: int) -> float:
