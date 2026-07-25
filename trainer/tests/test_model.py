@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import torch
 
 from trainer.config import Config
-from trainer.model import Inferencer, QuoridorNet, load_model
+from trainer.model import (
+    Inferencer,
+    QuoridorNet,
+    autocast_dtype_for_precision,
+    load_model,
+)
 
 
 def tiny_config() -> Config:
@@ -55,6 +61,60 @@ def test_inferencer_pads_to_fixed_shape_and_returns_masked_logits() -> None:
     assert np.isfinite(logits[:, 0]).all()
     assert np.isneginf(logits[0, 13])
     assert np.isfinite(logits[1, 13])
+
+
+@pytest.mark.parametrize(
+    ("precision", "expected_dtype"),
+    [
+        ("bf16", torch.bfloat16),
+        ("fp16", torch.float16),
+        ("fp32", None),
+    ],
+)
+def test_inferencer_selects_autocast_dtype_on_cpu_safe_shapes(
+    precision: str, expected_dtype: torch.dtype | None
+) -> None:
+    cfg = tiny_config()
+    cfg.net.inference_precision = precision
+    model = QuoridorNet(cfg).eval()
+    inferencer = Inferencer(model, cfg)
+
+    assert autocast_dtype_for_precision(precision) is expected_dtype
+    assert inferencer.inference_precision == precision
+    assert inferencer.autocast_dtype is expected_dtype
+
+    # CPU execution remains fp32 even when fp16/bf16 is selected; this keeps
+    # the test portable while still exercising precision selection.
+    planes = np.zeros((2, 6, 9, 9), dtype=np.float32)
+    masks = np.ones((2, 140), dtype=np.bool_)
+    logits, values = inferencer.infer(planes, masks)
+    assert logits.dtype == np.float32
+    assert values.dtype == np.float32
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
+def test_fp16_inferencer_cuda_outputs_are_finite_and_masked() -> None:
+    cfg = tiny_config()
+    cfg.net.inference_precision = "fp16"
+    model = QuoridorNet(cfg).to("cuda").eval()
+    inferencer = Inferencer(model, cfg)
+
+    rng = np.random.default_rng(17)
+    planes = rng.standard_normal((3, 6, 9, 9), dtype=np.float32)
+    masks = np.zeros((3, 140), dtype=np.bool_)
+    masks[:, [0, 7, 139]] = True
+    masks[1, 13] = True
+
+    logits, values, scores = inferencer.infer_with_score(planes, masks)
+
+    assert logits.dtype == np.float32
+    assert values.dtype == np.float32
+    assert scores.dtype == np.float32
+    assert not np.isnan(logits).any()
+    assert np.isfinite(logits[masks]).all()
+    assert np.isneginf(logits[~masks]).all()
+    assert np.isfinite(values).all()
+    assert np.isfinite(scores).all()
 
 
 def test_inferencer_uses_bounded_bucket_shapes() -> None:

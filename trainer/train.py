@@ -15,7 +15,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .config import Config
+from .config import INFERENCE_PRECISIONS, Config
 from .lifecycle import (
     ShutdownController,
     load_checkpoint,
@@ -105,7 +105,18 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--blocks", type=int, default=None)
     parser.add_argument("--channels", type=int, default=None)
     parser.add_argument("--extra-planes", action="store_true", default=None)
-    parser.add_argument("--no-bf16", action="store_true")
+    inference_precision = parser.add_mutually_exclusive_group()
+    inference_precision.add_argument(
+        "--inference-precision",
+        choices=INFERENCE_PRECISIONS,
+        default=None,
+        help="inference autocast precision (default: bf16)",
+    )
+    inference_precision.add_argument(
+        "--no-bf16",
+        action="store_true",
+        help="deprecated alias for --inference-precision fp32",
+    )
     parser.add_argument("--no-compile", action="store_true")
     parser.add_argument("--optimizer", choices=("sgd", "adamw"), default=None)
     parser.add_argument("--learning-rate", type=float, default=None)
@@ -770,8 +781,10 @@ def apply_cli_overrides(config: Config, args: argparse.Namespace) -> None:
         config.net.channels = args.channels
     if args.extra_planes:
         config.net.extra_planes = True
-    if args.no_bf16:
-        config.net.bf16 = False
+    if args.inference_precision is not None:
+        config.net.set_inference_precision(args.inference_precision)
+    elif args.no_bf16:
+        config.net.set_inference_precision("fp32")
     if args.no_compile:
         config.net.compile = False
     if args.optimizer is not None:

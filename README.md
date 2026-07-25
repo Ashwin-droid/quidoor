@@ -48,3 +48,15 @@ regressions (exit code 1 on regression, report saved under
 ```bash
 .venv/bin/python tools/regression.py --run runs/run1 --games 50
 ```
+
+## Kaggle / T4 inference
+
+NVIDIA T4 GPUs have fast fp16 tensor cores but no useful bf16 path. Run
+self-play inference with fp16 while leaving training precision unchanged:
+
+```bash
+.venv/bin/python -m trainer.train --inference-precision fp16
+```
+
+`--no-bf16` remains available as a deprecated alias for
+`--inference-precision fp32` when resuming older commands.

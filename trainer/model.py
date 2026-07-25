@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +10,17 @@ import torch
 from torch import nn
 
 from .config import Config
+
+
+def autocast_dtype_for_precision(precision: str) -> torch.dtype | None:
+    """Return the CUDA autocast dtype for an inference precision setting."""
+    if precision == "bf16":
+        return torch.bfloat16
+    if precision == "fp16":
+        return torch.float16
+    if precision == "fp32":
+        return None
+    raise ValueError(f"unsupported inference precision {precision!r}")
 
 
 def input_planes(config: Config) -> int:
@@ -165,6 +177,8 @@ class Inferencer:
         self.board = config.rules.board
         self.num_actions = config.rules.num_actions
         self.in_channels = input_planes(config)
+        self.inference_precision = config.net.resolved_inference_precision()
+        self.autocast_dtype = autocast_dtype_for_precision(self.inference_precision)
         fixed = config.net.fixed_batch_size or config.selfplay.leaf_batch_size
         self.fixed_batch_size = max(1, int(fixed))
         self.batch_buckets = self._build_batch_buckets(self.fixed_batch_size)
@@ -241,14 +255,17 @@ class Inferencer:
                     self.device, non_blocking=True
                 )
 
-                autocast_enabled = self.config.net.bf16 and self.device.type == "cuda"
-                with torch.autocast(
-                    device_type=self.device.type,
-                    dtype=torch.bfloat16,
-                    enabled=autocast_enabled,
-                ):
+                autocast_context = (
+                    torch.autocast(device_type="cuda", dtype=self.autocast_dtype)
+                    if self.device.type == "cuda" and self.autocast_dtype is not None
+                    else nullcontext()
+                )
+                with autocast_context:
                     logits_t, values_t, scores_t = self._model_for_infer(planes_t)
 
+                # Keep masking outside autocast. In particular, fp16 logits are
+                # promoted before inserting -inf so NumPy receives stable f32
+                # values without risking half-precision masking artifacts.
                 logits_t = mask_illegal_logits(logits_t.float(), masks_t)
                 values_t = values_t.float()
                 scores_t = scores_t.float()

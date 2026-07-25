@@ -12,7 +12,7 @@ from typing import Any
 import numpy as np
 import torch
 
-from .config import Config
+from .config import Config, NetConfig
 from .logging_utils import fsync_dir, read_json_if_present, utc_now_iso, write_json_atomic
 from .replay_buffer import ReplayBuffer
 
@@ -325,6 +325,12 @@ def _dataclass_from_dict(cls: type[Any], data: dict[str, Any]) -> Any:
             setattr(obj, field.name, _dataclass_from_dict(type(current), value))
         else:
             setattr(obj, field.name, value)
+    if (
+        cls is NetConfig
+        and "inference_precision" not in data
+        and "bf16" in data
+    ):
+        obj.bf16 = data["bf16"]
     return obj
 
 

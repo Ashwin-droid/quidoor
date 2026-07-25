@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 
+INFERENCE_PRECISIONS = ("bf16", "fp16", "fp32")
+
 
 @dataclass(slots=True)
 class RulesConfig:
@@ -33,15 +35,72 @@ class SelfPlayConfig:
     phase_games: int = 500
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, init=False)
 class NetConfig:
     blocks: int = 8
     channels: int = 128
     extra_planes: bool = False
-    bf16: bool = True
+    inference_precision: str = "bf16"
     compile: bool = True
     compile_mode: str = "max-autotune"
     fixed_batch_size: int | None = None
+
+    def __init__(
+        self,
+        blocks: int = 8,
+        channels: int = 128,
+        extra_planes: bool = False,
+        inference_precision: str = "bf16",
+        compile: bool = True,
+        compile_mode: str = "max-autotune",
+        fixed_batch_size: int | None = None,
+        *,
+        bf16: bool | None = None,
+    ) -> None:
+        self.blocks = blocks
+        self.channels = channels
+        self.extra_planes = extra_planes
+        self.inference_precision = self._validate_inference_precision(
+            inference_precision
+        )
+        self.compile = compile
+        self.compile_mode = compile_mode
+        self.fixed_batch_size = fixed_batch_size
+        if bf16 is not None:
+            self.bf16 = bf16
+
+    def set_inference_precision(self, precision: str) -> None:
+        """Set the inference precision using the non-deprecated interface."""
+        self.inference_precision = self._validate_inference_precision(precision)
+
+    def resolved_inference_precision(self) -> str:
+        """Return the canonical inference precision, including legacy aliases."""
+        return self._validate_inference_precision(self.inference_precision)
+
+    # Deprecated compatibility alias for old code and config snapshots.
+    # Assigning True maps to "bf16"; False maps to "fp32". Reading it keeps
+    # the old boolean behavior, while dataclass snapshots store only the new
+    # inference_precision field.
+    @property
+    def bf16(self) -> bool:
+        return self.resolved_inference_precision() == "bf16"
+
+    @bf16.setter
+    def bf16(self, value: bool | None) -> None:
+        if value is None:
+            return
+        if not isinstance(value, bool):
+            raise TypeError("net.bf16 must be a bool or None")
+        self.inference_precision = "bf16" if value else "fp32"
+
+    @staticmethod
+    def _validate_inference_precision(value: object) -> str:
+        if not isinstance(value, str) or value not in INFERENCE_PRECISIONS:
+            choices = ", ".join(INFERENCE_PRECISIONS)
+            raise ValueError(
+                f"net.inference_precision must be one of {choices}; got {value!r}"
+            )
+        return value
 
 
 @dataclass(slots=True)
@@ -111,4 +170,8 @@ class Config:
         }
 
     def asdict(self) -> dict:
-        return asdict(self)
+        data = asdict(self)
+        # Canonicalize snapshots so legacy bf16 assignments cannot create
+        # resume-only config differences.
+        data["net"]["inference_precision"] = self.net.resolved_inference_precision()
+        return data

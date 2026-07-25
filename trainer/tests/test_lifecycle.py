@@ -7,12 +7,24 @@ import numpy as np
 import torch
 
 from trainer.config import Config
-from trainer.lifecycle import ShutdownController, load_checkpoint, save_checkpoint_atomic
+from trainer.lifecycle import (
+    ShutdownController,
+    config_from_dict,
+    load_checkpoint,
+    save_checkpoint_atomic,
+    validate_resume_config,
+)
 from trainer.logging_utils import StatusWriter
 from trainer.model import QuoridorNet
 from trainer.replay_buffer import ReplayBuffer
 from trainer.selfplay_driver import run_selfplay_phase, stub_evaluator
-from trainer.train import build_optimizer, build_scheduler, run_training
+from trainer.train import (
+    apply_cli_overrides,
+    build_arg_parser,
+    build_optimizer,
+    build_scheduler,
+    run_training,
+)
 
 
 def tiny_config() -> Config:
@@ -52,6 +64,36 @@ def make_batch(count: int, cfg: Config) -> tuple[np.ndarray, np.ndarray, np.ndar
         policy[idx, action] = 1.0
         mask[idx, action] = True
     return planes, policy, mask, z
+
+
+def test_legacy_bf16_config_maps_to_canonical_precision() -> None:
+    legacy_fp32 = config_from_dict({"net": {"bf16": False}})
+    legacy_bf16 = config_from_dict({"net": {"bf16": True}})
+
+    assert legacy_fp32.net.inference_precision == "fp32"
+    assert legacy_fp32.net.resolved_inference_precision() == "fp32"
+    assert legacy_fp32.net.bf16 is False
+    assert legacy_bf16.net.inference_precision == "bf16"
+    assert legacy_bf16.net.resolved_inference_precision() == "bf16"
+    assert legacy_bf16.net.bf16 is True
+    assert Config().net.bf16 is True
+    assert "bf16" not in legacy_fp32.asdict()["net"]
+    assert legacy_fp32.asdict()["net"]["inference_precision"] == "fp32"
+    assert validate_resume_config(legacy_fp32, legacy_fp32) == []
+
+
+def test_inference_precision_cli_and_legacy_alias() -> None:
+    parser = build_arg_parser()
+
+    fp16_cfg = Config()
+    apply_cli_overrides(
+        fp16_cfg, parser.parse_args(["--inference-precision", "fp16"])
+    )
+    assert fp16_cfg.net.resolved_inference_precision() == "fp16"
+
+    fp32_cfg = Config()
+    apply_cli_overrides(fp32_cfg, parser.parse_args(["--no-bf16"]))
+    assert fp32_cfg.net.resolved_inference_precision() == "fp32"
 
 
 def test_checkpoint_round_trip_restores_counters_and_buffer(tmp_path: Path) -> None:
